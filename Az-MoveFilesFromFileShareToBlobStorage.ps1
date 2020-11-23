@@ -3,9 +3,11 @@ $configPath = $PSScriptRoot
 $configPath += "\secrets.config"
 $config = ([xml](Get-Content $configPath)).root
 
-# Input variables
+# Input variables for local Az Connection
 $_contextFilePath = $config.ContextFilePath
 $_subscriptionName = $config.SubscriptionName
+
+# Input variables required for copy
 $_coldStorageSourceFolderName = $config.ColdStorageSourceFolderName
 $_archiveStorageSourceFolderName = $config.ArchiveStorageSourceFolderName
 $_coldStorageTargetFolderName = $config.ColdStorageTargetFolderName
@@ -40,19 +42,36 @@ function CreateStorageAccountSasToken($StorageAccountContext, $ServiceType, $Res
 
     if (!($sasToken))
     {
-        Write-Host -ForegroundColor Red "Aanmaken SAS token mislukt voor storage account: " $StorageAccountContext.StorageAccountName
-        # TODO: Log
+        Write-Output -ForegroundColor Red "Aanmaken SAS token mislukt voor storage account: " $StorageAccountContext.StorageAccountName
         exit
     }
 
     return $sasToken
 }
 
+function CreateVirtualPath($Path)
+{
+    $virtualPathForFileName = $Path.Replace($targetContainer, "")
+    if ($virtualPathForFileName.StartsWith('/'))
+    {
+        # Remove the leading slash
+        $virtualPathForFileName = $virtualPathForFileName.SubString(1)
+    }
+
+    if ($virtualPathForFileName -and !($virtualPathForFileName).EndsWith('/'))
+    {   
+        # Add trailing slash
+        $virtualPathForFileName += '/'
+    }
+
+    return $virtualPathForFileName
+}
+
 # Process all files from a Azure File Share Directory
 function MoveAzCloudDirectoriesAndFilesRecursively($AzSourceFileShareName, $AzSourceFileShareDirectory, 
     $SourceStorageAccountContext, $SourceStorageAccountSasToken, $TargetStorageAccount, $TargetStorageAccountSasToken)
 {
-    Write-Host -ForegroundColor Magenta "Processing directory: " $AzSourceFileShareDirectory.Name
+    Write-Output -ForegroundColor Magenta "Processing directory: " $AzSourceFileShareDirectory.Name
 
     # Get path including parent path(s)
     $path = $AzSourceFileShareDirectory.CloudFileDirectory.Uri.PathAndQuery.Remove(0, ($AzSourceFileShareDirectory.CloudFileDirectory.Uri.PathAndQuery.IndexOf('/', 1) + 1))
@@ -62,22 +81,10 @@ function MoveAzCloudDirectoriesAndFilesRecursively($AzSourceFileShareName, $AzSo
     { 
         # Container is the first folder of the path
         $targetContainer = $path.Split('/')[0]
-        $virtualPathForFileName = $path.Replace($targetContainer, "")
-
+        $virtualPathForFileName = CreateVirtualPath -Path $path
+        
         # Now make container lowercase, as containers can only be lower case and it is not used in codeblock below anymore
         $targetContainer = $targetContainer.ToLower()
-
-        if ($virtualPathForFileName.StartsWith('/'))
-        {
-            # Remove the leading slash
-            $virtualPathForFileName = $virtualPathForFileName.SubString(1)
-        }
-
-        if ($virtualPathForFileName -and !($virtualPathForFileName).EndsWith('/'))
-        {   
-            # Add trailing slash
-            $virtualPathForFileName += '/'
-        }
     }
 
     $filesOrDirectoriesList = Get-AzStorageFile -ShareName $AzSourceFileShareName -Path $path -Context $SourceStorageAccountContext | Get-AzStorageFile
@@ -98,7 +105,7 @@ function MoveAzCloudDirectoriesAndFilesRecursively($AzSourceFileShareName, $AzSo
         elseif ($fileOrDir.GetType().name -eq "AzureStorageFile")
         {
             # It is a file; copy to target path and delete source 
-            Write-Host -ForegroundColor Green "Processing file: " $fileName
+            Write-Output -ForegroundColor Green "Processing file: " $fileName
 
             $virtualDirectoryAndFile = $virtualPathForFileName + $fileName
             # Copy the file
@@ -121,16 +128,14 @@ function MoveAzCloudDirectoriesAndFilesRecursively($AzSourceFileShareName, $AzSo
             }
             else
             {
-                Write-Host -ForegroundColor Red "Kopieren bestand" $fileName "is mislukt."
-                # TODO: Log copy failed
+                Write-Output -ForegroundColor Red "Kopieren bestand" $fileName "is mislukt."
                 # Retry?
                 exit
             }
         }
         else
         {
-            Write-Host -ForegroundColor Red "Filetype: " $fileOrDir.GetType().name " is nog niet in gebruik."
-            # TODO: Log
+            Write-Output -ForegroundColor Red "Filetype: " $fileOrDir.GetType().name " is nog niet in gebruik."
         }
     }
 }
@@ -175,7 +180,7 @@ foreach ($rg in $resourceGroupList)
                     {
                         $directoryName = $directory.Name
                         $targetStorageAccount;
-                            
+                         
                         # Get target storage account from the list of storage accounts
                         if ($directoryName -eq $_coldStorageSourceFolderName)
                         { 
@@ -187,7 +192,6 @@ foreach ($rg in $resourceGroupList)
                         }
                         else
                         {
-                            # TODO: Log
                             continue
                         }
 
